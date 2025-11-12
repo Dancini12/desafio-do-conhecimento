@@ -1,236 +1,411 @@
-#!/usr/bin/env python3
-# 🎮 Desafio do Conhecimento 🌎💡 – versão leve com som compatível no Windows
-
-import os
-import json
-import random
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, scrolledtext
 import google.generativeai as genai
+import json
+import threading
+import os 
 
-# ---------- CONFIGURAÇÃO ---------- #
-API_KEY = "AIzaSyBL7_A5r7m5m6Flk6euQB6eQiQAdr6A3kE"
-genai.configure(api_key=API_KEY)
-ARQUIVO_RANKING = "ranking.json"
+# ============ CONFIGURAÇÃO DO GEMINI ============
+# ATENÇÃO: A chave de API fornecida é inválida. Substitua "SUA_CHAVE_AQUI" pela sua chave válida.
+genai.configure(api_key="AIzaSyBL7_A5r7m5m6Flk6euQB6eQiQAdr6A3kE")
 
-# ---------- SOM (COM FALLBACK) ---------- #
-def tocar_palmas():
-    """Toca um som leve de palmas, ou imprime se não suportado."""
-    try:
-        import winsound
-        for freq in [880, 960, 1020, 1100]:
-            winsound.Beep(freq, 80)
-    except Exception:
-        print("👏 Palmas!")
+try:
+    # Corrigido para gemini-2.5-flash, o modelo atualmente recomendado.
+    gemini_model = genai.GenerativeModel("models/gemini-2.5-flash")  
+except Exception as e:
+    gemini_model = None
+    print(f"⚠️ Erro ao inicializar o modelo Gemini. Verifique a chave de API: {e}")
 
-def tocar_erro():
-    """Som de erro curto."""
-    try:
-        import winsound
-        winsound.Beep(220, 200)
-    except Exception:
-        print("❌ Erro!")
+# ============ CONFIGURAÇÃO DO RANKING ============
+RANKING_FILE = "ranking.json"
 
-# ---------- RANKING ---------- #
 def carregar_ranking():
-    if os.path.exists(ARQUIVO_RANKING):
-        with open(ARQUIVO_RANKING, "r", encoding="utf-8") as f:
-            return json.load(f)
+    """Carrega o ranking do arquivo JSON."""
+    if os.path.exists(RANKING_FILE):
+        with open(RANKING_FILE, 'r', encoding='utf-8') as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return []
     return []
 
-def salvar_ranking(ranking):
-    with open(ARQUIVO_RANKING, "w", encoding="utf-8") as f:
-        json.dump(ranking, f, indent=4, ensure_ascii=False)
+def salvar_ranking(ranking_data):
+    """Salva o ranking no arquivo JSON."""
+    with open(RANKING_FILE, 'w', encoding='utf-8') as f:
+        json.dump(ranking_data, f, ensure_ascii=False, indent=4)
 
-# ---------- PERGUNTAS ---------- #
-def gerar_pergunta_steam(nivel):
-    try:
-        prompt = (
-            f"Crie uma pergunta interdisciplinar baseada na metodologia STEAM "
-            f"para alunos do ensino fundamental, nível {nivel}. "
-            "A pergunta deve integrar pelo menos dois dos temas: Português, Matemática, Ciências, Artes e Tecnologia. "
-            "Responda apenas em JSON com as chaves: "
-            "'pergunta', 'alternativas' (lista com 4 opções curtas), "
-            "'correta' (texto da resposta certa), 'explicacao' (breve explicação de até 2 linhas)."
-        )
-
-        model = genai.GenerativeModel("models/gemini-2.0-flash")
-        response = model.generate_content(prompt)
-        texto_raw = response.text
-
-        import re
-        m = re.search(r'\{.*\}', texto_raw, flags=re.DOTALL)
-        if not m:
-            print("⚠️ Resposta inválida:", texto_raw)
-            return None
-
-        data = json.loads(m.group(0))
-        return {
-            "texto": data.get("pergunta", "").strip(),
-            "alternativas": [a.strip() for a in data.get("alternativas", [])[:4]],
-            "correta": data.get("correta", "").strip(),
-            "explicacao": data.get("explicacao", "").strip()
-        }
-    except Exception as e:
-        print("❌ Erro ao gerar pergunta:", e)
-        return None
-
-# ---------- APP PRINCIPAL ---------- #
-class App:
+# ============ CLASSE PRINCIPAL ============
+class JogoQuiz:
     def __init__(self, root):
         self.root = root
-        self.root.title("Desafio do Conhecimento 🌎💡")
-        self.root.geometry("880x620")
-        self.root.config(bg="#f4f4f4")
+        self.root.title("Desafio do Conhecimento 🎓")
+        self.root.geometry("800x600")
+        self.root.configure(bg="#E9F7EF") # Cor de fundo padrão
 
-        self.ranking = carregar_ranking()
-        self.pontos = 0
-        self.nome = ""
-        self.nivel = "fácil"
+        self.nome_jogador = ""
+        self.materia = None
+        self.dificuldade = "Fácil" 
+        self.pontuacao = 0
         self.vidas = 3
-        self.acertos_consecutivos = 0
+        self.acertos_consecutivos = 0 
+        self.pergunta_atual = None
+        self.gerando = False
 
-        self.tela_inicio()
+        self.criar_tela_splash() # Começa na tela de introdução
 
-    def tela_inicio(self):
-        for w in self.root.winfo_children():
-            w.destroy()
+    # ============ TELA DE SPLASH (INTRODUÇÃO) ============
+    def criar_tela_splash(self):
+        self.limpar_tela()
+        # Define um fundo branco para a introdução, como na imagem
+        self.root.configure(bg="white") 
+        
+        # Frame principal para centralizar o conteúdo
+        main_frame = tk.Frame(self.root, bg="white")
+        main_frame.pack(expand=True)
 
-        tk.Label(self.root, text="📘 Desafio do Conhecimento 🌎💡",
-                 font=("Arial", 28, "bold"), bg="#f4f4f4").pack(pady=20)
+        # === Parte Superior: Informações da Universidade (sem logo) ===
+        top_frame = tk.Frame(main_frame, bg="white")
+        top_frame.pack(pady=(20, 10))
 
-        frame = tk.Frame(self.root, bg="#f4f4f4")
-        frame.pack(pady=10)
+        # Texto da Universidade (agora alinhado diretamente na top_frame)
+        tk.Label(top_frame, text="UNIVERSIDADE ESTADUAL DO NORTE",
+                 font=("Arial", 14, "bold"), bg="white", fg="black", anchor="center").pack(fill="x", padx=20)
+        tk.Label(top_frame, text="DO PARANÁ",
+                 font=("Arial", 14, "bold"), bg="white", fg="black", anchor="center").pack(fill="x", padx=20)
+        tk.Label(top_frame, text="Campus Cornélio Procópio",
+                 font=("Arial", 12, "bold"), bg="white", fg="black", anchor="center").pack(fill="x", padx=20)
+        
+        # Linha separadora
+        tk.Frame(main_frame, bg="#3366CC", height=2).pack(fill="x", padx=100, pady=5) # Azul como na imagem
+        
+        tk.Label(main_frame, text="PROGRAMA DE PÓS-GRADUAÇÃO EM ENSINO",
+                 font=("Arial", 12), bg="white", fg="black").pack(pady=(5, 0))
+        tk.Label(main_frame, text="MESTRADO PROFISSIONAL EM ENSINO",
+                 font=("Arial", 12, "bold"), bg="white", fg="black").pack(pady=(0, 20))
+        
+        # === Nomes dos Desenvolvedores ===
+        nomes = [
+            "DANIELI GUEDES", "JULIANA TONHATO", "KARINA SANTANA,", 
+            "LUANA FERREIRA", "LUÍS", "MARIA EDUARDA" , "MARCEL DANCINI" 
+        ]
+        
+        for nome in nomes:
+            tk.Label(main_frame, text=nome, font=("Arial", 12), bg="white", fg="black").pack(pady=0) 
 
-        tk.Label(frame, text="Seu nome:", font=("Arial", 13), bg="#f4f4f4").grid(row=0, column=0, padx=5, pady=5)
-        self.entry_nome = tk.Entry(frame, font=("Arial", 13), width=30)
-        self.entry_nome.grid(row=0, column=1, padx=5, pady=5)
+        # === Títulos do Projeto ===
+        tk.Label(main_frame, text="RELATÓRIO CRÍTICO/MEMORIAIS",
+                 font=("Arial", 14, "bold"), bg="white", fg="#4CAF50").pack(pady=(40, 5)) 
+        
+        title_text = "GAMIFICAÇÃO E FEEDBACK ADAPTATIVO NA REVISÃO: UMA SOLUÇÃO STEAM PARA O FORTALECIMENTO DA BASE ESSENCIAL DO 7º ANO."
+        tk.Label(main_frame, text=title_text,
+                 font=("Arial", 14, "bold"), bg="white", fg="#4CAF50", wraplength=600, justify=tk.CENTER).pack(pady=(0, 40))
+        
+        # Botão para Iniciar
+        tk.Button(main_frame, text="Clique aqui para iniciar", font=("Arial", 18, "bold"),
+                  bg="#FFD700", fg="#1B5E20", activebackground="#FFEB3B", 
+                  command=self.criar_tela_configuracao).pack(pady=20, ipadx=20, ipady=10)
 
-        tk.Label(frame, text="Nível de dificuldade:", font=("Arial", 13), bg="#f4f4f4").grid(row=1, column=0, padx=5)
-        self.nivel_var = tk.StringVar(value="fácil")
-        nivel_menu = tk.OptionMenu(frame, self.nivel_var, "fácil", "médio", "difícil")
-        nivel_menu.config(font=("Arial", 12), width=22)
-        nivel_menu.grid(row=1, column=1, padx=5, pady=5)
 
-        tk.Button(self.root, text="Iniciar Desafio 🚀", font=("Arial", 14, "bold"),
-                  bg="#2e8b57", fg="white", command=self.iniciar).pack(pady=25)
+    # ============ TELA DE CONFIGURAÇÃO (ANTIGA TELA INICIAL) ============
+    def criar_tela_configuracao(self):
+        self.limpar_tela()
+        # Retorna a cor de fundo para a cor padrão do jogo
+        self.root.configure(bg="#E9F7EF") 
+        
+        self.pontuacao = 0
+        self.vidas = 3
+        self.gerando = False
+        self.acertos_consecutivos = 0 
+        
+        # Define o nível de escolaridade para o prompt do Gemini (mantido para contexto)
+        DIFICULDADE_PROMPT = {
+            "Fácil": "alunos do 7º ano",
+            "Médio": "alunos do Ensino Médio",
+            "Difícil": "nível universitário"
+        }
+        
+        tk.Label(self.root, text="Desafio do Conhecimento 🎓",
+                 font=("Arial", 26, "bold"), bg="#E9F7EF", fg="#1B5E20").pack(pady=30)
 
-        tk.Label(self.root, text="🏆 Ranking", font=("Arial", 15, "bold"),
-                 bg="#f4f4f4").pack(pady=10)
+        # Entrada de Nome
+        tk.Label(self.root, text="Digite seu nome:", bg="#E9F7EF", font=("Arial", 12)).pack()
+        self.nome_entry = tk.Entry(self.root, font=("Arial", 12), width=30)
+        self.nome_entry.pack(pady=5)
+        self.nome_entry.insert(0, self.nome_jogador)
 
-        self.frame_rank = tk.Frame(self.root, bg="#f4f4f4")
-        self.frame_rank.pack()
-        self.atualizar_ranking()
+        # Escolha da Matéria
+        tk.Label(self.root, text="Escolha a matéria:", bg="#E9F7EF", font=("Arial", 12)).pack(pady=10)
+        self.materia_var = tk.StringVar(value=self.materia if self.materia else "Português")
+        
+        # MATÉRIAS ATUALIZADAS: Somente Português, Matemática e Geografia
+        materias = ["Português", "Matemática", "Geografia"]
+        
+        for m in materias:
+            tk.Radiobutton(self.root, text=m, variable=self.materia_var, value=m,
+                           bg="#E9F7EF", font=("Arial", 11)).pack(anchor="w", padx=300)
 
-    def atualizar_ranking(self):
-        for w in self.frame_rank.winfo_children():
-            w.destroy()
-        if not self.ranking or not any(r["pontos"] > 0 for r in self.ranking):
-            tk.Label(self.frame_rank, text="🎮 Jogue para aparecer no ranking!",
-                     font=("Arial", 12, "italic"), bg="#f4f4f4", fg="gray").pack(pady=10)
-            return
-        for i, r in enumerate(sorted(self.ranking, key=lambda x: x["pontos"], reverse=True)):
-            if r["pontos"] > 0:
-                tk.Label(self.frame_rank, text=f"{i+1}. {r['nome']} — {r['pontos']} pts",
-                         font=("Arial", 12), bg="#f4f4f4").pack(anchor="w")
+        # Escolha da Dificuldade
+        tk.Label(self.root, text="Escolha a dificuldade:", bg="#E9F7EF", font=("Arial", 12)).pack(pady=10)
+        self.dificuldade_var = tk.StringVar(value=self.dificuldade)
+        dificuldades = ["Fácil", "Médio", "Difícil"]
+        
+        # Frame para os botões de dificuldade ficarem lado a lado
+        diff_frame = tk.Frame(self.root, bg="#E9F7EF")
+        diff_frame.pack(pady=5)
+        
+        for d in dificuldades:
+            tk.Radiobutton(diff_frame, text=d, variable=self.dificuldade_var, value=d,
+                           bg="#E9F7EF", font=("Arial", 11)).pack(side=tk.LEFT, padx=10)
 
+        # Botões de Ação
+        tk.Button(self.root, text="Iniciar Jogo", font=("Arial", 14, "bold"),
+                  bg="#1B5E20", fg="white", command=self.iniciar).pack(pady=20)
+        
+        tk.Button(self.root, text="Ver Ranking", font=("Arial", 12),
+                  bg="#006064", fg="white", command=self.exibir_ranking).pack(pady=10)
+
+
+    # ============ INICIAR ============
     def iniciar(self):
-        nome = self.entry_nome.get().strip()
+        nome = self.nome_entry.get().strip()
         if not nome:
-            messagebox.showwarning("Aviso", "Digite seu nome para começar.")
+            messagebox.showwarning("Atenção", "Digite seu nome para começar.")
+            return
+        
+        if gemini_model is None:
+            messagebox.showerror("Erro de API", 
+                                 "O modelo Gemini não pôde ser inicializado.\n"
+                                 "Por favor, verifique se sua chave de API está configurada corretamente no código.")
+            return
+            
+        self.nome_jogador = nome
+        self.materia = self.materia_var.get()
+        self.dificuldade = self.dificuldade_var.get() # Salva a dificuldade escolhida
+        self.carregar_proxima_pergunta("Gerando primeira pergunta...")
+
+    # ============ TELA DE CARREGAMENTO ============
+    def carregar_proxima_pergunta(self, texto="Carregando próxima pergunta..."):
+        if self.gerando:
+            return
+        self.gerando = True
+        self.limpar_tela()
+        self.loading_label = tk.Label(self.root, text=texto, bg="#E9F7EF",
+                                      font=("Arial", 16, "italic"), fg="#1B5E20")
+        self.loading_label.pack(pady=250)
+        self.animar_pontinhos(0)
+        threading.Thread(target=self.gerar_pergunta_gemini).start()
+
+    # ============ ANIMAÇÃO DE PONTINHOS ============
+    def animar_pontinhos(self, count):
+        if not self.gerando:
+            return
+        pontos = "." * (count % 4)
+        self.loading_label.config(text=f"Carregando próxima pergunta{pontos}")
+        self.root.after(400, lambda: self.animar_pontinhos(count + 1))
+
+    # ============ GERAR PERGUNTA COM GEMINI ============
+    def gerar_pergunta_gemini(self):
+        # Mapeamento do nível de dificuldade para o prompt
+        nivel_escolaridade = {
+            "Fácil": "alunos do 7º ano",
+            "Médio": "alunos do Ensino Médio",
+            "Difícil": "nível universitário"
+        }.get(self.dificuldade, "alunos do 7º ano")
+        
+        try:
+            prompt = (
+                f"Crie uma pergunta de múltipla escolha para {nivel_escolaridade} "
+                f"sobre o tema '{self.materia}'. "
+                "A resposta deve ser APENAS um JSON no formato: "
+                '{"pergunta":"...","alternativas":{"A":"...","B":"...","C":"...","D":"..."},"correta":"A"} '
+                "sem explicações, comentários ou texto adicional."
+            )
+
+            resposta = gemini_model.generate_content(prompt)
+            texto = resposta.text.strip()
+
+            if "```" in texto:
+                texto = texto.replace("```json", "").replace("```", "").strip()
+
+            dados = json.loads(texto)
+            self.pergunta_atual = dados
+            self.root.after(0, self.exibir_pergunta)
+
+        except Exception as e:
+            print("❌ Erro ao gerar pergunta:", e)
+            self.gerando = False
+            messagebox.showerror("Erro de Conexão/API", 
+                                 "Não foi possível gerar uma pergunta.\n"
+                                 "Verifique sua conexão com a internet ou se a chave de API está correta.")
+            self.root.after(0, self.criar_tela_configuracao) # Volta para a tela de configuração em caso de erro
+
+    # ============ EXIBIR PERGUNTA ============
+    def exibir_pergunta(self):
+        self.gerando = False
+        self.limpar_tela()
+        self.root.configure(bg="#E9F7EF") # Garante a cor de fundo correta para o jogo
+
+        frame = tk.Frame(self.root, bg="#E9F7EF")
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Exibe o número de acertos consecutivos
+        info_text = f"Jogador: {self.nome_jogador} | Pontos: {self.pontuacao} | Dificuldade: {self.dificuldade}"
+        tk.Label(frame, text=info_text,
+                 bg="#E9F7EF", font=("Arial", 12, "italic")).pack(anchor="ne", pady=5)
+        
+        vidas_text = f"Vidas: {'❤️'*self.vidas} | Acertos Seguidos: {self.acertos_consecutivos}/3"
+        tk.Label(frame, text=vidas_text, bg="#E9F7EF",
+                 font=("Arial", 14, "bold")).pack(anchor="ne", pady=5)
+
+        pergunta = self.pergunta_atual["pergunta"]
+        alternativas = self.pergunta_atual["alternativas"]
+
+        pergunta_box = scrolledtext.ScrolledText(frame, wrap="word", height=4,
+                                                 width=80, font=("Arial", 13))
+        pergunta_box.insert(tk.END, pergunta)
+        pergunta_box.configure(state="disabled", bg="#F9FFF9")
+        pergunta_box.pack(pady=10)
+
+        self.resposta_var = tk.StringVar()
+        for letra, texto in alternativas.items():
+            tk.Radiobutton(frame, text=f"{letra}) {texto}",
+                           variable=self.resposta_var, value=letra,
+                           bg="#E9F7EF", font=("Arial", 12),
+                           anchor="w", justify="left", wraplength=700).pack(fill="x", padx=40, pady=4)
+
+        tk.Button(frame, text="Responder", bg="#1B5E20", fg="white",
+                  font=("Arial", 13, "bold"), command=self.verificar_resposta).pack(pady=25)
+
+    # ============ VERIFICAR RESPOSTA ============
+    def verificar_resposta(self):
+        resposta = self.resposta_var.get()
+        if not resposta:
+            messagebox.showinfo("Atenção", "Selecione uma alternativa.")
             return
 
-        self.nome = nome
-        self.nivel = self.nivel_var.get()
-        self.pontos = 0
-        self.vidas = 3
-        self.acertos_consecutivos = 0
-        self.nova_pergunta()
-
-    def nova_pergunta(self):
-        self.pergunta_atual = gerar_pergunta_steam(self.nivel)
-        if not self.pergunta_atual:
-            messagebox.showerror("Erro", "Falha ao gerar pergunta.")
-            self.tela_inicio()
-            return
-        self.mostrar_pergunta()
-
-    def mostrar_pergunta(self):
-        for w in self.root.winfo_children():
-            w.destroy()
-
-        p = self.pergunta_atual
-        header = tk.Frame(self.root, bg="#e9f5ef")
-        header.pack(fill="x", pady=5)
-
-        lbl_info = tk.Label(header,
-                            text=f"{self.nome}  |  Pontos: {self.pontos}",
-                            font=("Arial", 13, "bold"),
-                            bg="#e9f5ef")
-        lbl_info.pack(side="left", padx=20)
-
-        lbl_vidas = tk.Label(header,
-                             text=" ".join(["❤️"] * self.vidas),
-                             font=("Arial", 18),
-                             bg="#e9f5ef",
-                             fg="red")
-        lbl_vidas.pack(side="right", padx=20)
-
-        tk.Label(self.root, text=p["texto"], wraplength=820,
-                 font=("Arial", 16, "bold"), bg="#f4f4f4",
-                 justify="center").pack(pady=25)
-
-        frame = tk.Frame(self.root, bg="#f4f4f4")
-        frame.pack(pady=10)
-
-        for alt in p["alternativas"]:
-            btn = tk.Button(frame, text=alt, font=("Arial", 13),
-                            bg="#e8f5e9", fg="black",
-                            wraplength=780, width=70, height=2,
-                            relief="ridge", command=lambda a=alt: self.verificar(a))
-            btn.pack(pady=6)
-
-    def verificar(self, resposta):
         correta = self.pergunta_atual["correta"]
-        if resposta.lower() == correta.lower():
-            self.pontos += 10
-            self.acertos_consecutivos += 1
-            tocar_palmas()
-            if self.acertos_consecutivos % 3 == 0 and self.vidas < 5:
+        if resposta.upper() == correta.upper():
+            self.pontuacao += 10
+            self.acertos_consecutivos += 1 # Aumenta acertos seguidos
+            
+            # NOVO: Verifica vida extra
+            if self.acertos_consecutivos >= 3:
                 self.vidas += 1
-                messagebox.showinfo("Bônus!", "🎉 Você ganhou um coração extra!")
+                self.acertos_consecutivos = 0 # Reseta
+                messagebox.showinfo("⭐ BÔNUS! ⭐", "Três acertos seguidos! Você ganhou uma vida extra!")
             else:
-                messagebox.showinfo("Correto!", f"✅ {self.pergunta_atual['explicacao']}")
+                 messagebox.showinfo("🎉 Correto!", "Você acertou! +10 pontos")
+                 
         else:
             self.vidas -= 1
-            self.acertos_consecutivos = 0
-            tocar_erro()
+            self.acertos_consecutivos = 0 # Reseta a contagem
+            
             if self.vidas <= 0:
                 self.game_over()
                 return
-            messagebox.showwarning("Errado!", f"❌ Resposta certa: {correta}\n\n{self.pergunta_atual['explicacao']}")
-        self.nova_pergunta()
+            messagebox.showerror("❌ Errou!", f"A resposta certa era: {correta}\nVocê perdeu uma vida!")
 
+        self.carregar_proxima_pergunta()
+
+    # ============ GAME OVER ============
     def game_over(self):
-        self.ranking.append({"nome": self.nome, "pontos": self.pontos})
-        self.ranking = sorted(self.ranking, key=lambda x: x["pontos"], reverse=True)[:10]
-        salvar_ranking(self.ranking)
+        self.gerando = False
+        
+        # Adiciona a pontuação ao ranking
+        novo_registro = {
+            "nome": self.nome_jogador,
+            "materia": self.materia,
+            "dificuldade": self.dificuldade, 
+            "pontuacao": self.pontuacao
+        }
+        ranking = carregar_ranking()
+        ranking.append(novo_registro)
+        salvar_ranking(ranking)
+        
+        self.limpar_tela()
+        self.root.configure(bg="#F8D7DA") # Garante a cor de fundo correta
+        frame = tk.Frame(self.root, bg="#F8D7DA")
+        frame.pack(fill="both", expand=True)
+        tk.Label(frame, text="💀 GAME OVER 💀", bg="#F8D7DA",
+                 font=("Arial", 28, "bold"), fg="red").pack(pady=40)
+        tk.Label(frame, text=f"{self.nome_jogador}, sua pontuação final foi: {self.pontuacao} ({self.dificuldade})",
+                 bg="#F8D7DA", font=("Arial", 15)).pack(pady=10)
+        
+        # Botões de Ação
+        tk.Button(frame, text="Jogar Novamente", bg="#1B5E20", fg="white",
+                  font=("Arial", 14, "bold"), command=self.criar_tela_configuracao).pack(pady=10)
+        tk.Button(frame, text="Ver Ranking", bg="#006064", fg="white",
+                  font=("Arial", 14, "bold"), command=self.exibir_ranking).pack(pady=10)
+        tk.Button(frame, text="Sair", bg="#8B0000", fg="white",
+                  font=("Arial", 12, "bold"), command=self.root.destroy).pack(pady=5)
+        
+    # ============ EXIBIR RANKING ============
+    def exibir_ranking(self):
+        self.limpar_tela()
+        self.root.configure(bg="#E9F7EF") # Garante cor de fundo correta
+        ranking = carregar_ranking()
+        
+        # 1. Classificar o ranking pela pontuação (do maior para o menor)
+        ranking_ordenado = sorted(ranking, key=lambda x: x['pontuacao'], reverse=True)
+        
+        tk.Label(self.root, text="🏆 Ranking dos Melhores 🏆",
+                 font=("Arial", 24, "bold"), bg="#E9F7EF", fg="#006064").pack(pady=20)
+        
+        # Frame para a tabela do ranking
+        ranking_frame = tk.Frame(self.root, bg="#FFFFFF", padx=10, pady=10, borderwidth=2, relief="groove")
+        ranking_frame.pack(padx=50, pady=10, fill="x")
+        
+        # Cabeçalho: adicionada a coluna de Dificuldade
+        colunas = ["Pos.", "Nome", "Matéria", "Dificuldade", "Pontos"]
+        larguras = [5, 18, 12, 10, 8]
+        
+        for i, (coluna, largura) in enumerate(zip(colunas, larguras)):
+            tk.Label(ranking_frame, text=coluna, font=("Arial", 12, "bold"), 
+                     bg="#B2DFDB", fg="#004D40", width=largura, 
+                     anchor="w" if i > 0 else "center", padx=5).grid(row=0, column=i, sticky="ew")
 
+        # Dados do Ranking (Top 10)
+        if not ranking_ordenado:
+            tk.Label(ranking_frame, text="Nenhum registro de pontuação ainda.", 
+                     font=("Arial", 12, "italic"), bg="#FFFFFF", pady=10).grid(row=1, column=0, columnspan=5, sticky="ew")
+        else:
+            for i, record in enumerate(ranking_ordenado[:10]):
+                bg_color = "#E0F2F1" if i % 2 == 0 else "#FFFFFF"
+                
+                posicao = i + 1
+                nome = record.get("nome", "Desconhecido")
+                materia = record.get("materia", "N/A")
+                dificuldade = record.get("dificuldade", "N/A") 
+                pontuacao = record.get("pontuacao", 0)
+
+                # Posição
+                tk.Label(ranking_frame, text=f"#{posicao}", font=("Arial", 11), bg=bg_color, fg="#000000", 
+                         width=larguras[0], anchor="center", padx=5).grid(row=i+1, column=0, sticky="ew")
+                # Nome
+                tk.Label(ranking_frame, text=nome, font=("Arial", 11), bg=bg_color, fg="#000000", 
+                         width=larguras[1], anchor="w", padx=5).grid(row=i+1, column=1, sticky="ew")
+                # Matéria
+                tk.Label(ranking_frame, text=materia, font=("Arial", 11), bg=bg_color, fg="#000000", 
+                         width=larguras[2], anchor="w", padx=5).grid(row=i+1, column=2, sticky="ew")
+                # Dificuldade
+                tk.Label(ranking_frame, text=dificuldade, font=("Arial", 11), bg=bg_color, fg="#000000", 
+                         width=larguras[3], anchor="w", padx=5).grid(row=i+1, column=3, sticky="ew")
+                # Pontos
+                tk.Label(ranking_frame, text=str(pontuacao), font=("Arial", 11, "bold"), bg=bg_color, fg="#000000", 
+                         width=larguras[4], anchor="w", padx=5).grid(row=i+1, column=4, sticky="ew")
+                         
+        # Botão Voltar (solicitado)
+        tk.Button(self.root, text="Voltar ao Menu Principal", font=("Arial", 12, "bold"),
+                  bg="#1B5E20", fg="white", command=self.criar_tela_configuracao).pack(pady=30)
+        
+    # ============ LIMPAR ============
+    def limpar_tela(self):
         for w in self.root.winfo_children():
             w.destroy()
 
-        tk.Label(self.root, text=f"🎮 Game Over, {self.nome}!",
-                 font=("Arial", 22, "bold"), bg="#f4f4f4").pack(pady=25)
-        tk.Label(self.root, text=f"Sua pontuação: {self.pontos}",
-                 font=("Arial", 16), bg="#f4f4f4").pack(pady=10)
 
-        tk.Button(self.root, text="Jogar Novamente 🔁", font=("Arial", 14, "bold"),
-                  bg="#2e8b57", fg="white", command=self.tela_inicio).pack(pady=10)
-        tk.Button(self.root, text="Sair", font=("Arial", 12),
-                  command=self.root.destroy).pack(pady=5)
-
-# ---------- EXECUÇÃO ---------- #
+# ============ EXECUTAR ============
 if __name__ == "__main__":
     root = tk.Tk()
-    app = App(root)
+    app = JogoQuiz(root)
     root.mainloop()
