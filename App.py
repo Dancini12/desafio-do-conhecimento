@@ -50,6 +50,7 @@ class JogoQuiz:
         self.acertos_consecutivos = 0 
         self.pergunta_atual = None
         self.gerando = False
+        self.total_perguntas_respondidas = 0 # NOVO: Total de perguntas respondidas
 
         self.criar_tela_splash() # Começa na tela de introdução
 
@@ -86,7 +87,7 @@ class JogoQuiz:
         # === Nomes dos Desenvolvedores ===
         nomes = [
             "DANIELI GUEDES", "JULIANA TONHATO", "KARINA SANTANA,", 
-            "LUANA FERREIRA", "LUÍS", "MARIA EDUARDA" , "MARCEL DANCINI" 
+            "LUANA FERREIRA", "LUÍS, MARIA EDUARDA E MARCEL", "DANCINI" 
         ]
         
         for nome in nomes:
@@ -116,6 +117,7 @@ class JogoQuiz:
         self.vidas = 3
         self.gerando = False
         self.acertos_consecutivos = 0 
+        self.total_perguntas_respondidas = 0 # NOVO: Reseta o contador
         
         # Define o nível de escolaridade para o prompt do Gemini (mantido para contexto)
         DIFICULDADE_PROMPT = {
@@ -283,6 +285,8 @@ class JogoQuiz:
             messagebox.showinfo("Atenção", "Selecione uma alternativa.")
             return
 
+        self.total_perguntas_respondidas += 1 # NOVO: Incrementa o total de perguntas respondidas
+
         correta = self.pergunta_atual["correta"]
         if resposta.upper() == correta.upper():
             self.pontuacao += 10
@@ -311,12 +315,21 @@ class JogoQuiz:
     def game_over(self):
         self.gerando = False
         
+        # CÁLCULO DO PERCENTUAL DE ACERTO (NOVO)
+        if self.total_perguntas_respondidas > 0:
+            # self.pontuacao / 10 é o número de acertos
+            acertos = self.pontuacao / 10
+            percentual = (acertos / self.total_perguntas_respondidas) * 100
+        else:
+            percentual = 0.0
+
         # Adiciona a pontuação ao ranking
         novo_registro = {
             "nome": self.nome_jogador,
             "materia": self.materia,
             "dificuldade": self.dificuldade, 
-            "pontuacao": self.pontuacao
+            "pontuacao": self.pontuacao,
+            "percentual_acerto": round(percentual, 1) # NOVO: Salva com uma casa decimal
         }
         ranking = carregar_ranking()
         ranking.append(novo_registro)
@@ -328,8 +341,14 @@ class JogoQuiz:
         frame.pack(fill="both", expand=True)
         tk.Label(frame, text="💀 GAME OVER 💀", bg="#F8D7DA",
                  font=("Arial", 28, "bold"), fg="red").pack(pady=40)
-        tk.Label(frame, text=f"{self.nome_jogador}, sua pontuação final foi: {self.pontuacao} ({self.dificuldade})",
-                 bg="#F8D7DA", font=("Arial", 15)).pack(pady=10)
+        
+        # MENSAGEM ATUALIZADA (NOVO)
+        msg_final = f"{self.nome_jogador}, sua pontuação final foi: {self.pontuacao} ({self.dificuldade})."
+        tk.Label(frame, text=msg_final,
+                 bg="#F8D7DA", font=("Arial", 15)).pack(pady=5)
+
+        tk.Label(frame, text=f"Percentual de Acerto: {percentual:.1f}%",
+                 bg="#F8D7DA", font=("Arial", 15, "bold"), fg="#1B5E20").pack(pady=5)
         
         # Botões de Ação
         tk.Button(frame, text="Jogar Novamente", bg="#1B5E20", fg="white",
@@ -346,7 +365,7 @@ class JogoQuiz:
         ranking = carregar_ranking()
         
         # 1. Classificar o ranking pela pontuação (do maior para o menor)
-        ranking_ordenado = sorted(ranking, key=lambda x: x['pontuacao'], reverse=True)
+        ranking_ordenado = sorted(ranking, key=lambda x: x.get('pontuacao', 0), reverse=True)
         
         tk.Label(self.root, text="🏆 Ranking dos Melhores 🏆",
                  font=("Arial", 24, "bold"), bg="#E9F7EF", fg="#006064").pack(pady=20)
@@ -355,48 +374,62 @@ class JogoQuiz:
         ranking_frame = tk.Frame(self.root, bg="#FFFFFF", padx=10, pady=10, borderwidth=2, relief="groove")
         ranking_frame.pack(padx=50, pady=10, fill="x")
         
-        # Cabeçalho: adicionada a coluna de Dificuldade
-        colunas = ["Pos.", "Nome", "Matéria", "Dificuldade", "Pontos"]
-        larguras = [5, 18, 12, 10, 8]
+        # Cabeçalho: ATUALIZADO para incluir Percentual
+        colunas = ["Pos.", "Nome", "Matéria", "Nível", "Pontos", "% Acerto"]
+        # Ligeiro ajuste nas larguras para melhor visualização
+        larguras = [5, 16, 10, 8, 8, 11] 
         
         for i, (coluna, largura) in enumerate(zip(colunas, larguras)):
-            tk.Label(ranking_frame, text=coluna, font=("Arial", 12, "bold"), 
+            tk.Label(ranking_frame, text=coluna, font=("Arial", 10, "bold"),
                      bg="#B2DFDB", fg="#004D40", width=largura, 
                      anchor="w" if i > 0 else "center", padx=5).grid(row=0, column=i, sticky="ew")
 
         # Dados do Ranking (Top 10)
         if not ranking_ordenado:
             tk.Label(ranking_frame, text="Nenhum registro de pontuação ainda.", 
-                     font=("Arial", 12, "italic"), bg="#FFFFFF", pady=10).grid(row=1, column=0, columnspan=5, sticky="ew")
+                     font=("Arial", 12, "italic"), bg="#FFFFFF", pady=10).grid(row=1, column=0, columnspan=6, sticky="ew")
         else:
             for i, record in enumerate(ranking_ordenado[:10]):
                 bg_color = "#E0F2F1" if i % 2 == 0 else "#FFFFFF"
                 
                 posicao = i + 1
+                # Usa .get() com valor padrão para compatibilidade com registros antigos
                 nome = record.get("nome", "Desconhecido")
                 materia = record.get("materia", "N/A")
                 dificuldade = record.get("dificuldade", "N/A") 
                 pontuacao = record.get("pontuacao", 0)
+                percentual_acerto = record.get("percentual_acerto", 0.0) 
 
                 # Posição
-                tk.Label(ranking_frame, text=f"#{posicao}", font=("Arial", 11), bg=bg_color, fg="#000000", 
+                tk.Label(ranking_frame, text=f"#{posicao}", font=("Arial", 10), bg=bg_color, fg="#000000", 
                          width=larguras[0], anchor="center", padx=5).grid(row=i+1, column=0, sticky="ew")
                 # Nome
-                tk.Label(ranking_frame, text=nome, font=("Arial", 11), bg=bg_color, fg="#000000", 
+                tk.Label(ranking_frame, text=nome, font=("Arial", 10), bg=bg_color, fg="#000000", 
                          width=larguras[1], anchor="w", padx=5).grid(row=i+1, column=1, sticky="ew")
                 # Matéria
-                tk.Label(ranking_frame, text=materia, font=("Arial", 11), bg=bg_color, fg="#000000", 
+                tk.Label(ranking_frame, text=materia, font=("Arial", 10), bg=bg_color, fg="#000000", 
                          width=larguras[2], anchor="w", padx=5).grid(row=i+1, column=2, sticky="ew")
-                # Dificuldade
-                tk.Label(ranking_frame, text=dificuldade, font=("Arial", 11), bg=bg_color, fg="#000000", 
+                # Dificuldade (Nível)
+                tk.Label(ranking_frame, text=dificuldade, font=("Arial", 10), bg=bg_color, fg="#000000", 
                          width=larguras[3], anchor="w", padx=5).grid(row=i+1, column=3, sticky="ew")
                 # Pontos
-                tk.Label(ranking_frame, text=str(pontuacao), font=("Arial", 11, "bold"), bg=bg_color, fg="#000000", 
+                tk.Label(ranking_frame, text=str(pontuacao), font=("Arial", 10, "bold"), bg=bg_color, fg="#000000", 
                          width=larguras[4], anchor="w", padx=5).grid(row=i+1, column=4, sticky="ew")
+                # Percentual de Acerto
+                tk.Label(ranking_frame, text=f"{percentual_acerto:.1f}%", font=("Arial", 10, "bold"), bg=bg_color, fg="#1B5E20", 
+                         width=larguras[5], anchor="w", padx=5).grid(row=i+1, column=5, sticky="ew")
                          
-        # Botão Voltar (solicitado)
-        tk.Button(self.root, text="Voltar ao Menu Principal", font=("Arial", 12, "bold"),
-                  bg="#1B5E20", fg="white", command=self.criar_tela_configuracao).pack(pady=30)
+        # Frame para os botões de ação (NOVO)
+        button_frame = tk.Frame(self.root, bg="#E9F7EF")
+        button_frame.pack(pady=30)
+        
+        # Botão Voltar (Mantido)
+        tk.Button(button_frame, text="Voltar ao Menu Principal", font=("Arial", 12, "bold"),
+                  bg="#1B5E20", fg="white", command=self.criar_tela_configuracao).pack(side=tk.LEFT, padx=10)
+        
+        # Botão Sair do Jogo (NOVO)
+        tk.Button(button_frame, text="Sair do Jogo", font=("Arial", 12, "bold"),
+                  bg="#8B0000", fg="white", command=self.root.destroy).pack(side=tk.LEFT, padx=10)
         
     # ============ LIMPAR ============
     def limpar_tela(self):
